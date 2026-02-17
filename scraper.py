@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
 BASE_URL = "https://lespepitestech.com"
-LISTING_URL = f"{BASE_URL}/home"
 CATEGORY_URL = f"{BASE_URL}/startup-collection"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -56,10 +55,10 @@ class PepitesScraper:
         except Exception:
             pass
 
-        # 2) Tags from the first 5 homepage pages
+        # 2) Tags from the first 5 startup-collection pages
         for page in range(5):
             try:
-                resp = self.session.get(f"{LISTING_URL}?page={page}", timeout=15)
+                resp = self.session.get(f"{CATEGORY_URL}?page={page}", timeout=15)
                 resp.raise_for_status()
                 soup = BeautifulSoup(resp.text, "html.parser")
                 for a in soup.select(
@@ -82,7 +81,7 @@ class PepitesScraper:
         if category:
             url = f"{CATEGORY_URL}/{category}?page={page_number}"
         else:
-            url = f"{LISTING_URL}?page={page_number}"
+            url = f"{CATEGORY_URL}?page={page_number}"
         resp = self.session.get(url, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
