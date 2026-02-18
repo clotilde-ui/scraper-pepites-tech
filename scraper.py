@@ -21,17 +21,12 @@ class PepitesScraper:
         self.session.headers.update(HEADERS)
 
     def fetch_categories(self):
-        """Fetch available categories from multiple sources.
-
-        Combines:
-        - Sidebar "Les collections" (major collections with startup counts)
-        - Tags from the first few homepage pages (finer categories)
+        """Fetch collection pages from the sidebar.
 
         Returns dict: {slug: {"name": str, "count": int or None}}
         """
         cats = {}
 
-        # 1) Sidebar collections from a category page (major categories with counts)
         try:
             resp = self.session.get(f"{CATEGORY_URL}/saas", timeout=15)
             resp.raise_for_status()
@@ -54,25 +49,6 @@ class PepitesScraper:
                             cats[slug] = {"name": name, "count": count}
         except Exception:
             pass
-
-        # 2) Tags from the first 5 startup-collection pages
-        for page in range(5):
-            try:
-                resp = self.session.get(f"{CATEGORY_URL}?page={page}", timeout=15)
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.select(
-                    ".lpt-dropdown-category a, .lpt-dropdown-all-categories a"
-                ):
-                    name = a.get_text(strip=True)
-                    href = a.get("href", "")
-                    if name and href and "/startup-collection/" in href:
-                        slug = href.split("/startup-collection/")[-1]
-                        if slug and slug not in cats:
-                            cats[slug] = {"name": name, "count": None}
-            except Exception:
-                break
-            time.sleep(0.3)
 
         return dict(sorted(cats.items(), key=lambda x: x[1]["name"].lower()))
 
