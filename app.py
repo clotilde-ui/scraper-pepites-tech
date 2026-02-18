@@ -7,6 +7,7 @@ import pandas as pd
 from flask import Flask, render_template, jsonify, request, send_file
 
 from scraper import PepitesScraper
+from scraper_chefs_etablissement import ChefsEtablissementScraper
 
 app = Flask(__name__)
 
@@ -124,6 +125,120 @@ def api_export(fmt):
         filepath = os.path.join(DATA_DIR, f"pepites_{timestamp}.xlsx")
         df.to_excel(filepath, index=False)
         return send_file(filepath, as_attachment=True, download_name=f"pepites_{timestamp}.xlsx")
+    else:
+        return jsonify({"error": "Format non supporté. Utilisez 'csv' ou 'excel'."}), 400
+
+
+# ---------------------------------------------------------------------------
+# Chefs d'établissement – état global
+# ---------------------------------------------------------------------------
+chefs_state = {
+    "running": False,
+    "progress": 0,
+    "total": 0,
+    "message": "",
+    "results": [],
+}
+chefs_lock = threading.Lock()
+
+
+def chefs_progress_callback(current, total, message):
+    with chefs_lock:
+        chefs_state["progress"] = current
+        chefs_state["total"] = total
+        chefs_state["message"] = message
+
+
+def run_chefs_scrape(departement, max_records):
+    with chefs_lock:
+        chefs_state["running"] = True
+        chefs_state["progress"] = 0
+        chefs_state["total"] = 1
+        chefs_state["message"] = "Démarrage…"
+        chefs_state["results"] = []
+
+    scraper = ChefsEtablissementScraper()
+    results = scraper.scrape(
+        departement=departement,
+        max_records=max_records,
+        progress_callback=chefs_progress_callback,
+    )
+
+    with chefs_lock:
+        chefs_state["results"] = results
+        chefs_state["running"] = False
+        chefs_state["message"] = f"Terminé ! {len(results)} établissements récupérés."
+
+
+@app.route("/chefs-etablissement")
+def chefs_etablissement():
+    return render_template("chefs_etablissement.html")
+
+
+@app.route("/api/chefs/scrape", methods=["POST"])
+def api_chefs_scrape():
+    with chefs_lock:
+        if chefs_state["running"]:
+            return jsonify({"error": "Un scraping est déjà en cours."}), 409
+
+    data = request.get_json(force=True)
+    departement = (data.get("departement") or "").strip() or None
+    max_records = int(data.get("max_records", 0))
+
+    thread = threading.Thread(
+        target=run_chefs_scrape, args=(departement, max_records)
+    )
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/chefs/progress")
+def api_chefs_progress():
+    with chefs_lock:
+        return jsonify({
+            "running": chefs_state["running"],
+            "progress": chefs_state["progress"],
+            "total": chefs_state["total"],
+            "message": chefs_state["message"],
+            "count": len(chefs_state["results"]),
+        })
+
+
+@app.route("/api/chefs/results")
+def api_chefs_results():
+    with chefs_lock:
+        return jsonify(chefs_state["results"])
+
+
+@app.route("/api/chefs/export/<fmt>")
+def api_chefs_export(fmt):
+    with chefs_lock:
+        results = list(chefs_state["results"])
+
+    if not results:
+        return jsonify({"error": "Aucune donnée à exporter."}), 400
+
+    df = pd.DataFrame(results)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "csv":
+        filepath = os.path.join(DATA_DIR, f"chefs_etablissement_{timestamp}.csv")
+        df.to_csv(filepath, index=False, encoding="utf-8-sig")
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=f"chefs_etablissement_{timestamp}.csv",
+        )
+    elif fmt == "excel":
+        filepath = os.path.join(DATA_DIR, f"chefs_etablissement_{timestamp}.xlsx")
+        df.to_excel(filepath, index=False)
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=f"chefs_etablissement_{timestamp}.xlsx",
+        )
     else:
         return jsonify({"error": "Format non supporté. Utilisez 'csv' ou 'excel'."}), 400
 

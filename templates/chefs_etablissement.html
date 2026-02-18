@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chefs d'établissement – Lycées &amp; Collèges publics</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f7fa; }
+        .card { border: none; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+        #results-table { font-size: .85rem; }
+        .progress { height: 24px; }
+        .badge-proviseur  { background-color: #0d6efd; }
+        .badge-principal  { background-color: #198754; }
+        .role-badge { font-size: .75rem; font-weight: 600; }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+
+    <!-- Navigation -->
+    <nav class="mb-3">
+        <a href="/" class="text-decoration-none text-muted">&larr; Retour au scraper Pépites Tech</a>
+    </nav>
+
+    <h1 class="mb-1">Chefs d'établissement</h1>
+    <p class="text-muted mb-4">
+        Proviseurs et Principaux des <strong>lycées et collèges publics de France</strong><br>
+        <small>Source : <a href="https://data.education.gouv.fr/explore/dataset/fr-en-annuaire-education/" target="_blank">Annuaire de l'Éducation nationale (open data)</a></small>
+    </p>
+
+    <!-- Contrôles -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form id="scrape-form" class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label for="departement" class="form-label">Département <span class="text-muted">(optionnel)</span></label>
+                    <input type="text" id="departement" class="form-control"
+                           placeholder="Ex : Rhône, 75, Gironde…"
+                           title="Laissez vide pour récupérer toute la France">
+                </div>
+                <div class="col-md-3">
+                    <label for="max-records" class="form-label">Limite d'établissements</label>
+                    <div class="input-group">
+                        <input type="number" id="max-records" class="form-control" value="0" min="0">
+                        <span class="input-group-text" style="font-size:.75rem" title="0 = tous">0 = tous</span>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" id="btn-scrape" class="btn btn-primary mt-2">
+                        Lancer le scraping
+                    </button>
+                </div>
+            </form>
+
+            <div class="mt-2">
+                <small class="text-muted">
+                    Environ <strong>13 000+</strong> établissements publics en France (lycées + collèges).
+                    La récupération complète prend ~1-2 minutes.
+                </small>
+            </div>
+
+            <!-- Barre de progression -->
+            <div id="progress-section" class="mt-3 d-none">
+                <div class="progress mb-2">
+                    <div id="progress-bar"
+                         class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                         role="progressbar" style="width:0%">0%</div>
+                </div>
+                <small id="progress-msg" class="text-muted"></small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filtres rapides + export -->
+    <div id="export-section" class="mb-3 d-none row align-items-center g-2">
+        <div class="col-auto">
+            <span class="fw-semibold" id="result-count"></span>
+        </div>
+        <div class="col-auto">
+            <input type="text" id="search-filter" class="form-control form-control-sm"
+                   placeholder="Rechercher…" style="width:220px">
+        </div>
+        <div class="col-auto">
+            <select id="role-filter" class="form-select form-select-sm" style="width:160px">
+                <option value="">Tous les rôles</option>
+                <option value="Proviseur">Proviseur</option>
+                <option value="Principal">Principal</option>
+            </select>
+        </div>
+        <div class="col-auto ms-auto">
+            <a href="/api/chefs/export/csv" class="btn btn-success btn-sm me-1">Export CSV</a>
+            <a href="/api/chefs/export/excel" class="btn btn-success btn-sm">Export Excel</a>
+        </div>
+    </div>
+
+    <!-- Tableau résultats -->
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0" id="results-table">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>Rôle</th>
+                        <th>Nom du chef d'établissement</th>
+                        <th>Établissement</th>
+                        <th>Type</th>
+                        <th>Commune</th>
+                        <th>Département</th>
+                        <th>Région</th>
+                        <th>Téléphone</th>
+                        <th>Email</th>
+                        <th>Élèves</th>
+                    </tr>
+                </thead>
+                <tbody id="results-body">
+                    <tr>
+                        <td colspan="11" class="text-center text-muted py-4">
+                            Aucune donnée. Lancez un scraping pour commencer.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <p class="text-muted mt-2" id="filtered-count"></p>
+</div>
+
+<script>
+const form            = document.getElementById('scrape-form');
+const btnScrape       = document.getElementById('btn-scrape');
+const progressSection = document.getElementById('progress-section');
+const progressBar     = document.getElementById('progress-bar');
+const progressMsg     = document.getElementById('progress-msg');
+const exportSection   = document.getElementById('export-section');
+const resultCount     = document.getElementById('result-count');
+const resultsBody     = document.getElementById('results-body');
+const searchFilter    = document.getElementById('search-filter');
+const roleFilter      = document.getElementById('role-filter');
+const filteredCount   = document.getElementById('filtered-count');
+
+let allData = [];
+let pollInterval = null;
+
+// ── Lancement du scraping ──────────────────────────────────────────────────
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const departement = document.getElementById('departement').value.trim();
+    const maxRecords  = parseInt(document.getElementById('max-records').value) || 0;
+
+    btnScrape.disabled = true;
+    btnScrape.textContent = 'Scraping en cours…';
+    progressSection.classList.remove('d-none');
+    exportSection.classList.add('d-none');
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
+    progressBar.classList.add('progress-bar-animated');
+
+    try {
+        const resp = await fetch('/api/chefs/scrape', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({departement, max_records: maxRecords}),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            alert(err.error || 'Erreur');
+            resetBtn();
+            return;
+        }
+    } catch (err) {
+        alert('Erreur réseau : ' + err);
+        resetBtn();
+        return;
+    }
+
+    // Polling
+    pollInterval = setInterval(async () => {
+        try {
+            const resp = await fetch('/api/chefs/progress');
+            const data = await resp.json();
+
+            const pct = data.total > 0
+                ? Math.min(100, Math.round((data.progress / data.total) * 100))
+                : 0;
+            progressBar.style.width = pct + '%';
+            progressBar.textContent = pct + '%';
+            progressMsg.textContent = data.message;
+
+            if (!data.running) {
+                clearInterval(pollInterval);
+                progressBar.classList.remove('progress-bar-animated');
+                progressBar.style.width = '100%';
+                progressBar.textContent = '100%';
+                resetBtn();
+                loadResults();
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }, 800);
+});
+
+function resetBtn() {
+    btnScrape.disabled = false;
+    btnScrape.textContent = 'Lancer le scraping';
+}
+
+// ── Chargement + affichage ─────────────────────────────────────────────────
+async function loadResults() {
+    const resp = await fetch('/api/chefs/results');
+    allData = await resp.json();
+
+    if (allData.length === 0) {
+        resultsBody.innerHTML =
+            '<tr><td colspan="11" class="text-center text-muted py-4">Aucun résultat trouvé.</td></tr>';
+        exportSection.classList.add('d-none');
+        return;
+    }
+
+    resultCount.textContent = allData.length + ' établissements récupérés';
+    exportSection.classList.remove('d-none');
+    renderTable(allData);
+}
+
+function renderTable(data) {
+    if (data.length === 0) {
+        resultsBody.innerHTML =
+            '<tr><td colspan="11" class="text-center text-muted py-3">Aucun résultat pour ce filtre.</td></tr>';
+        filteredCount.textContent = '';
+        return;
+    }
+
+    resultsBody.innerHTML = data.map((r, i) => {
+        const roleCls = r.role === 'Proviseur' ? 'badge-proviseur' : 'badge-principal';
+        const mail    = r.mail
+            ? `<a href="mailto:${esc(r.mail)}">${esc(r.mail)}</a>`
+            : '';
+
+        return `<tr>
+            <td>${i + 1}</td>
+            <td><span class="badge role-badge ${roleCls}">${esc(r.role)}</span></td>
+            <td class="fw-semibold">${esc(r.nom_chef_etablissement) || '<span class="text-muted">—</span>'}</td>
+            <td>${esc(r.nom_etablissement)}</td>
+            <td><small class="text-muted">${esc(r.type_etablissement)}</small></td>
+            <td>${esc(r.commune)}</td>
+            <td>${esc(r.departement)}</td>
+            <td>${esc(r.region)}</td>
+            <td><small>${esc(r.telephone)}</small></td>
+            <td><small>${mail}</small></td>
+            <td class="text-center">${r.nombre_eleves || ''}</td>
+        </tr>`;
+    }).join('');
+
+    filteredCount.textContent =
+        data.length < allData.length
+            ? `Affichage de ${data.length} sur ${allData.length} établissements`
+            : '';
+}
+
+// ── Filtres live ───────────────────────────────────────────────────────────
+function applyFilters() {
+    const q    = searchFilter.value.toLowerCase();
+    const role = roleFilter.value;
+
+    const filtered = allData.filter(r => {
+        const matchRole = !role || r.role === role;
+        const matchQ    = !q || [
+            r.nom_chef_etablissement,
+            r.nom_etablissement,
+            r.commune,
+            r.departement,
+            r.region,
+        ].some(v => (v || '').toLowerCase().includes(q));
+        return matchRole && matchQ;
+    });
+
+    renderTable(filtered);
+}
+
+searchFilter.addEventListener('input', applyFilters);
+roleFilter.addEventListener('change', applyFilters);
+
+// ── Utilitaire XSS-safe ────────────────────────────────────────────────────
+function esc(str) {
+    if (!str) return '';
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+</script>
+</body>
+</html>
