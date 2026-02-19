@@ -1,5 +1,4 @@
 import os
-import json
 import threading
 from datetime import datetime
 
@@ -19,6 +18,7 @@ scrape_state = {
     "results": [],
 }
 state_lock = threading.Lock()
+current_scraper = None  # reference to stop it
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -31,26 +31,47 @@ def progress_callback(current, total, message):
         scrape_state["message"] = message
 
 
-def run_scrape(num_pages, with_details, category=None):
+def result_callback(new_startups):
+    """Called incrementally as new startups are scraped."""
     with state_lock:
+        scrape_state["results"].extend(new_startups)
+
+
+def run_scrape(num_pages, with_details, category=None, all_categories=False):
+    global current_scraper
+    scraper = PepitesScraper()
+
+    with state_lock:
+        current_scraper = scraper
         scrape_state["running"] = True
         scrape_state["progress"] = 0
-        scrape_state["total"] = num_pages
+        scrape_state["total"] = 1
         scrape_state["message"] = "Démarrage..."
         scrape_state["results"] = []
 
-    scraper = PepitesScraper()
-    results = scraper.scrape(
-        num_pages=num_pages,
-        with_details=with_details,
-        category=category,
-        progress_callback=progress_callback,
-    )
+    if all_categories:
+        scraper.scrape_all_categories(
+            with_details=with_details,
+            progress_callback=progress_callback,
+            result_callback=result_callback,
+        )
+    else:
+        scraper.scrape(
+            num_pages=num_pages,
+            with_details=with_details,
+            category=category,
+            progress_callback=progress_callback,
+            result_callback=result_callback,
+        )
 
     with state_lock:
-        scrape_state["results"] = results
         scrape_state["running"] = False
-        scrape_state["message"] = f"Terminé ! {len(results)} startups trouvées."
+        count = len(scrape_state["results"])
+        if scraper.stop_requested:
+            scrape_state["message"] = f"Arrêté. {count} startups récupérées."
+        else:
+            scrape_state["message"] = f"Terminé ! {count} startups trouvées."
+        current_scraper = None
 
 
 @app.route("/")
@@ -74,12 +95,22 @@ def api_scrape():
     num_pages = 0 if raw_pages == 0 else min(raw_pages, 100)
     with_details = bool(data.get("with_details", False))
     category = data.get("category") or None
+    all_categories = bool(data.get("all_categories", False))
 
-    thread = threading.Thread(target=run_scrape, args=(num_pages, with_details, category))
+    thread = threading.Thread(target=run_scrape, args=(num_pages, with_details, category, all_categories))
     thread.daemon = True
     thread.start()
 
     return jsonify({"status": "started", "num_pages": num_pages})
+
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    with state_lock:
+        if current_scraper and scrape_state["running"]:
+            current_scraper.stop()
+            return jsonify({"status": "stopping"})
+    return jsonify({"status": "not_running"})
 
 
 @app.route("/api/progress")

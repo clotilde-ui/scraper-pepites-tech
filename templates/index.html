@@ -25,13 +25,14 @@
                 <div class="col-auto">
                     <label for="category" class="form-label">Catégorie</label>
                     <select id="category" class="form-select" style="min-width:260px">
-                        <option value="">Toutes les collections</option>
+                        <option value="">Toutes (défaut)</option>
+                        <option value="__all__">Toutes les collections</option>
                         {% for slug, info in categories.items() %}
                         <option value="{{ slug }}">{{ info.name }}{% if info.count %} ({{ info.count }}){% endif %}</option>
                         {% endfor %}
                     </select>
                 </div>
-                <div class="col-auto">
+                <div class="col-auto" id="num-pages-group">
                     <label for="num-pages" class="form-label">Nombre de pages</label>
                     <div class="input-group" style="width:200px">
                         <input type="number" id="num-pages" class="form-control" value="3" min="0" max="100">
@@ -49,6 +50,9 @@
                 <div class="col-auto">
                     <button type="submit" id="btn-scrape" class="btn btn-primary mt-2">
                         Lancer le scraping
+                    </button>
+                    <button type="button" id="btn-stop" class="btn btn-danger mt-2 d-none">
+                        Arrêter
                     </button>
                 </div>
             </form>
@@ -97,6 +101,7 @@
 <script>
 const form = document.getElementById('scrape-form');
 const btnScrape = document.getElementById('btn-scrape');
+const btnStop = document.getElementById('btn-stop');
 const progressSection = document.getElementById('progress-section');
 const progressBar = document.getElementById('progress-bar');
 const progressMsg = document.getElementById('progress-msg');
@@ -106,16 +111,37 @@ const resultsBody = document.getElementById('results-body');
 
 let pollInterval = null;
 
+// Hide/show num-pages when "all collections" is selected
+const categorySelect = document.getElementById('category');
+const numPagesGroup = document.getElementById('num-pages-group');
+categorySelect.addEventListener('change', () => {
+    numPagesGroup.style.display = categorySelect.value === '__all__' ? 'none' : '';
+});
+
+// Stop button
+btnStop.addEventListener('click', async () => {
+    btnStop.disabled = true;
+    btnStop.textContent = 'Arrêt en cours...';
+    try {
+        await fetch('/api/stop', { method: 'POST' });
+    } catch (err) {
+        console.error(err);
+    }
+});
+
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const numPages = parseInt(document.getElementById('num-pages').value) || 3;
-    const withDetails = document.getElementById('with-details').checked;
     const category = document.getElementById('category').value;
+    const allCategories = category === '__all__';
+    const numPages = allCategories ? 0 : (parseInt(document.getElementById('num-pages').value) || 3);
+    const withDetails = document.getElementById('with-details').checked;
 
-    btnScrape.disabled = true;
-    btnScrape.textContent = 'Scraping en cours...';
+    btnScrape.classList.add('d-none');
+    btnStop.classList.remove('d-none');
+    btnStop.disabled = false;
+    btnStop.textContent = 'Arrêter';
     progressSection.classList.remove('d-none');
-    exportSection.classList.add('d-none');
+    progressBar.classList.add('progress-bar-animated');
     progressBar.style.width = '0%';
     progressBar.textContent = '0%';
 
@@ -123,19 +149,19 @@ form.addEventListener('submit', async (e) => {
         const resp = await fetch('/api/scrape', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({num_pages: numPages, with_details: withDetails, category: category})
+            body: JSON.stringify({num_pages: numPages, with_details: withDetails, category: allCategories ? '' : category, all_categories: allCategories})
         });
         if (!resp.ok) {
             const err = await resp.json();
             alert(err.error || 'Erreur');
-            btnScrape.disabled = false;
-            btnScrape.textContent = 'Lancer le scraping';
+            btnScrape.classList.remove('d-none');
+            btnStop.classList.add('d-none');
             return;
         }
     } catch (err) {
         alert('Erreur réseau : ' + err);
-        btnScrape.disabled = false;
-        btnScrape.textContent = 'Lancer le scraping';
+        btnScrape.classList.remove('d-none');
+        btnStop.classList.add('d-none');
         return;
     }
 
@@ -148,15 +174,22 @@ form.addEventListener('submit', async (e) => {
             const pct = data.total > 0 ? Math.round((data.progress / data.total) * 100) : 0;
             progressBar.style.width = pct + '%';
             progressBar.textContent = pct + '%';
-            progressMsg.textContent = data.message;
+            progressMsg.textContent = data.message + ` (${data.count} startups)`;
+
+            // Show export as soon as we have results
+            if (data.count > 0) {
+                resultCount.textContent = data.count + ' startups';
+                exportSection.classList.remove('d-none');
+            }
 
             if (!data.running) {
                 clearInterval(pollInterval);
-                btnScrape.disabled = false;
-                btnScrape.textContent = 'Lancer le scraping';
+                btnScrape.classList.remove('d-none');
+                btnStop.classList.add('d-none');
                 progressBar.classList.remove('progress-bar-animated');
                 progressBar.style.width = '100%';
                 progressBar.textContent = '100%';
+                progressMsg.textContent = data.message;
 
                 // Load results
                 loadResults();
